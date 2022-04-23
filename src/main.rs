@@ -11,9 +11,9 @@ const PORT: u16 = 10001;
 
 async fn cbus_session() -> io::Result<()> {
     // Connect to a CBUS device
-    let mut stream = TcpStream::connect((HOST, PORT)).await?;
+    let stream = TcpStream::connect((HOST, PORT)).await?;
 
-    let (mut inp, mut out) = stream.into_split();
+    let (inp, mut out) = stream.into_split();
 
     out.write_all(&codec::preamble()[..]).await?;
 

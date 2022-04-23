@@ -3,12 +3,12 @@ use std::ops::BitOr;
 use bytes::{Bytes, BytesMut};
 use nom::{
     bytes::complete::{tag, take},
-    combinator::{map, map_opt, opt},
+    combinator::{all_consuming, map, map_opt, opt},
     sequence::{preceded, tuple},
     IResult, Parser,
 };
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Setting(u8);
 
 // Options 1
@@ -33,7 +33,7 @@ impl BitOr for Setting {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Param(u8);
 pub const APPLICATION1: Param = Param(0x21);
 pub const APPLICATION2: Param = Param(0x22);
@@ -41,24 +41,24 @@ pub const OPTIONS1: Param = Param(0x30);
 pub const OPTIONS1_NV: Param = Param(0x41);
 pub const OPTIONS3: Param = Param(0x42);
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Level(u8);
 pub const ON: Level = Level(0xff);
 pub const OFF: Level = Level(0x0);
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Group(u8);
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Rate(u8);
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum Message {
     SetParam(Param, Setting),
     SetVar(Group, Level, Rate),
     Reset,
     StopRamp(Group),
-    Unrecognised,
+    Unrecognised(Bytes),
 }
 use Message::*;
 
@@ -71,34 +71,34 @@ pub fn hex_byte(input: &[u8]) -> IResult<&[u8], u8> {
     map_opt(take(2usize), hex_extract).parse(input)
 }
 
-pub fn message_from_parts(parts: (u8, u8, u8, Option<u8>)) -> Message {
+pub fn message_from_parts(parts: (u8, u8, u8, Option<u8>)) -> Option<Message> {
     match parts {
-        (0x79, group, _check, None) => SetVar(Group(group), ON, Rate(0)),
-        (0x01, group, _check, None) => SetVar(Group(group), OFF, Rate(0)),
-        (0x09, group, _check, None) => StopRamp(Group(group)),
-        (rate, group, level, Some(_check)) => SetVar(Group(group), Level(level), Rate(rate)),
-        _ => Unrecognised,
+        (0x79, group, _check, None) => Some(SetVar(Group(group), ON, Rate(0))),
+        (0x01, group, _check, None) => Some(SetVar(Group(group), OFF, Rate(0))),
+        (0x09, group, _check, None) => Some(StopRamp(Group(group))),
+        (rate, group, level, Some(_check)) => Some(SetVar(Group(group), Level(level), Rate(rate))),
+        _ => None,
     }
 }
 
 pub fn decode(bytes: Bytes) -> Message {
-    let mut pattern = map(
+    let mut pattern = all_consuming(map_opt(
         preceded(
             tuple((tag("05"), take(2usize), tag("3800"))),
             tuple((hex_byte, hex_byte, hex_byte, opt(hex_byte))),
         ),
         message_from_parts,
-    );
+    ));
 
     let result = pattern.parse(&bytes[..]);
 
     match result {
-        Ok((remainder, mesg)) if remainder.is_empty() => mesg,
-        _ => Unrecognised,
+        Ok((_, mesg)) => mesg,
+        _ => Unrecognised(bytes.clone()),
     }
 }
 
-pub fn encode(mesg: &Message) -> Bytes {
+pub fn encode(mesg: Message) -> Bytes {
     match mesg {
         SetVar(Group(g), Level(l), Rate(_s)) => Bytes::from(format!("\\05380002{g:02X}{l:02X}\r")),
         SetParam(Param(p), Setting(s)) => Bytes::from(format!("@A3{p:02x}00{s:02x}\r")),
@@ -109,9 +109,12 @@ pub fn encode(mesg: &Message) -> Bytes {
 
 pub fn preamble() -> Bytes {
     let mut p = BytesMut::new();
-    p.extend_from_slice(&encode(&Reset)[..]);
-    p.extend_from_slice(&encode(&SetParam(OPTIONS3, LOCAL_SAL | EX_STAT))[..]);
-    p.extend_from_slice(&encode(&SetParam(OPTIONS1, SMART | ID_MON | CONNECT | MONITOR))[..]);
+    p.extend(encode(Reset));
+    p.extend(encode(SetParam(OPTIONS3, LOCAL_SAL | EX_STAT)));
+    p.extend(encode(SetParam(
+        OPTIONS1,
+        SMART | ID_MON | CONNECT | MONITOR,
+    )));
     p.freeze()
 }
 
@@ -119,57 +122,57 @@ pub fn preamble() -> Bytes {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn setvar_on() {
+    #[test]
+    fn setvar_on() {
         let m = decode(b"05003800790400".as_ref().into());
         assert_eq!(m, SetVar(Group(4), ON, Rate(0)))
     }
 
-    #[tokio::test]
-    async fn setvar_off() {
+    #[test]
+    fn setvar_off() {
         let m = decode(b"05003800010400".as_ref().into());
         assert_eq!(m, SetVar(Group(4), OFF, Rate(0)))
     }
 
-    #[tokio::test]
-    async fn stop_ramp() {
+    #[test]
+    fn stop_ramp() {
         let m = decode(b"05003800090400".as_ref().into());
         assert_eq!(m, StopRamp(Group(4)))
     }
 
-    #[tokio::test]
-    async fn setvar_level() {
+    #[test]
+    fn setvar_level() {
         let m = decode(b"0500380024041F00".as_ref().into());
         assert_eq!(m, SetVar(Group(4), Level(0x1f), Rate(36)))
     }
 
-    #[tokio::test]
-    async fn short_message() {
-        let m = decode(b"050038007904".as_ref().into());
-        assert_eq!(m, Unrecognised)
+    #[test]
+    fn short_message() {
+        assert_unrecognised(b"050038007904".as_ref().into());
     }
 
-    #[tokio::test]
-    async fn empty_message() {
-        let m = decode(b"".as_ref().into());
-        assert_eq!(m, Unrecognised)
+    #[test]
+    fn empty_message() {
+        assert_unrecognised(b"".as_ref().into());
     }
 
-    #[tokio::test]
-    async fn long_message() {
-        let m = decode(b"0500380024041F00A1".as_ref().into());
-        assert_eq!(m, Unrecognised)
+    #[test]
+    fn long_message() {
+        assert_unrecognised(b"0500380024041F00A1".as_ref().into());
     }
 
-    #[tokio::test]
-    async fn odd_length() {
-        let m = decode(b"0500380079040".as_ref().into());
-        assert_eq!(m, Unrecognised)
+    #[test]
+    fn odd_length() {
+        assert_unrecognised(b"0500380079040".as_ref().into());
     }
 
-    #[tokio::test]
-    async fn not_hex() {
-        let m = decode(b"0500380009z400".as_ref().into());
-        assert_eq!(m, Unrecognised)
+    #[test]
+    fn not_hex() {
+        assert_unrecognised(b"0500380009z400".as_ref().into());
+    }
+
+    fn assert_unrecognised(bytes: Bytes) {
+        let m = decode(bytes.clone());
+        assert_eq!(m, Unrecognised(bytes))
     }
 }
