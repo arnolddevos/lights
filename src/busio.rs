@@ -3,14 +3,10 @@ use nom::character::streaming::{line_ending, not_line_ending};
 use nom::sequence::pair;
 use nom::IResult;
 use std::future::Future;
-use std::io::{Cursor, Error, ErrorKind};
+use std::io::{Error, ErrorKind};
 use std::pin::Pin;
+use tokio::io::{self, AsyncRead, AsyncReadExt};
 use tokio::sync::mpsc::Sender;
-
-use tokio::{
-    io::{self, AsyncRead, AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
 
 const LINE_LEN: usize = 1024;
 const CHUNK_LEN: usize = 4096;
@@ -62,9 +58,9 @@ where
 }
 
 /// Emit the complete lines currently in the buffer.
-async fn emit_lines<O, F>(buf: &mut BytesMut, out: O)
+async fn emit_lines<O, F>(buf: &mut BytesMut, out: &mut O)
 where
-    O: Fn(Bytes) -> F,
+    O: FnMut(Bytes) -> F,
     F: Future<Output = ()>,
 {
     while let Some(line) = split_line(buf) {
@@ -74,14 +70,22 @@ where
     }
 }
 
-/// Read input as available or CHUNK_LEN bytes at a time and
-/// pass it line by line to a function or closure.
-/// Ignore any line longer than LINE_LEN.
+/// Continuously read lines from a stream.
+///
+/// Reads CHUNK_LEN bytes at a time or as available and
+/// passes it line by line to a function or closure.
+///
+/// Ignores any line longer than LINE_LEN.
 /// The buffer space requirement is not affected by long lines.
-pub async fn read_lines<I, O, F>(mut inp: I, out: O) -> io::Result<()>
+///
+/// Never returns normally (result type could be `!`).  
+/// If the end of the stream is reached an `UnexpectedEof`
+/// error is returned.
+///
+pub async fn read_lines<I, O, F>(mut inp: I, mut out: O) -> io::Result<()>
 where
     I: AsyncRead + Unpin,
-    O: Fn(Bytes) -> F,
+    O: FnMut(Bytes) -> F,
     F: Future<Output = ()>,
 {
     let mut buf = BytesMut::with_capacity(LINE_LEN + CHUNK_LEN);
@@ -90,32 +94,25 @@ where
     // (if input arrives in small pieces a partial line maybe repeatedly scanned).
     loop {
         read_more(&mut inp, &mut buf).await?;
-        emit_lines(&mut buf, &out).await;
+        emit_lines(&mut buf, &mut out).await;
 
         // remainder in buf is a partial line longer than the limit
         while buf.len() > LINE_LEN {
             drop_long_line(&mut inp, &mut buf).await?;
-            emit_lines(&mut buf, &out).await;
+            emit_lines(&mut buf, &mut out).await;
         }
     }
 }
 
-pub fn read_lines_to_queue<'a, I>(
-    inp: &'a mut I,
-    out: &'a Sender<Bytes>,
-) -> impl Future<Output = io::Result<()>> + 'a
-where
-    I: AsyncRead + Unpin,
-{
-    let cb = |value| async {
-        let _ = out.send(value).await;
-    };
-    read_lines(inp, cb)
-}
-
-pub fn adapt_sender<'a, T>(
-    s: &'a Sender<T>,
-) -> impl Fn(T) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
+/// Returns an async function that forwards values to an mpsc queue.   
+///
+/// Example: arrange for lines of input to be sent to a queue:
+/// ```
+/// let (rx, _) = tcp_stream.split();
+/// let (tx, _) = mpsc::channel(100);
+/// read_lines(rx, forward_to(tx))
+/// ```
+pub fn forward_to<'a, T>(s: &'a Sender<T>) -> impl Fn(T) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
     |value| {
         Box::pin(async {
             let _ = s.send(value).await;
@@ -123,17 +120,18 @@ pub fn adapt_sender<'a, T>(
     }
 }
 
-pub fn read_lines_to_adapted_queue<'a, I>(
-    inp: &'a mut I,
-    out: &'a Sender<Bytes>,
-) -> impl Future<Output = io::Result<()>> + 'a
-where
-    I: AsyncRead + Unpin,
-{
-    read_lines(inp, adapt_sender(out))
-}
+#[cfg(test)]
+mod tests {
+    use super::read_lines;
+    use std::io::Cursor;
 
-async fn example() {
-    let inp = Cursor::new(b"hello\nworld\n");
-    let _ = read_lines(inp, |bytes| async move { println!("> {:?}", bytes) }).await;
+    #[tokio::test]
+    async fn example() {
+        let inp = Cursor::new(b"hello\nworld\nover");
+        let res = read_lines(inp, |bytes| async move {
+            println!("> {:?}", bytes);
+        })
+        .await;
+        println!("{:?}", res)
+    }
 }

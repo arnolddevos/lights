@@ -1,13 +1,11 @@
 use std::ops::BitOr;
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use nom::{
-    bytes::complete::{tag, take, take_while_m_n},
-    character::is_hex_digit,
-    combinator::{map, map_opt, map_res, opt},
-    error::Error,
+    bytes::complete::{tag, take},
+    combinator::{map, map_opt, opt},
     sequence::{preceded, tuple},
-    AsBytes, IResult, Parser,
+    IResult, Parser,
 };
 
 #[derive(PartialEq, Debug)]
@@ -95,65 +93,83 @@ pub fn decode(bytes: Bytes) -> Message {
     let result = pattern.parse(&bytes[..]);
 
     match result {
-        Ok((remainder, message)) if remainder.is_empty() => message,
+        Ok((remainder, mesg)) if remainder.is_empty() => mesg,
         _ => Unrecognised,
     }
 }
 
+pub fn encode(mesg: &Message) -> Bytes {
+    match mesg {
+        SetVar(Group(g), Level(l), Rate(_s)) => Bytes::from(format!("\\05380002{g:02X}{l:02X}\r")),
+        SetParam(Param(p), Setting(s)) => Bytes::from(format!("@A3{p:02x}00{s:02x}\r")),
+        Reset => Bytes::from(b"~".as_ref()),
+        _ => Bytes::new(),
+    }
+}
+
+pub fn preamble() -> Bytes {
+    let mut p = BytesMut::new();
+    p.extend_from_slice(&encode(&Reset)[..]);
+    p.extend_from_slice(&encode(&SetParam(OPTIONS3, LOCAL_SAL | EX_STAT))[..]);
+    p.extend_from_slice(&encode(&SetParam(OPTIONS1, SMART | ID_MON | CONNECT | MONITOR))[..]);
+    p.freeze()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
     async fn setvar_on() {
-        let m = decode(b"05003800790400".as_bytes().into());
+        let m = decode(b"05003800790400".as_ref().into());
         assert_eq!(m, SetVar(Group(4), ON, Rate(0)))
     }
 
     #[tokio::test]
     async fn setvar_off() {
-        let m = decode(b"05003800010400".as_bytes().into());
+        let m = decode(b"05003800010400".as_ref().into());
         assert_eq!(m, SetVar(Group(4), OFF, Rate(0)))
     }
 
     #[tokio::test]
     async fn stop_ramp() {
-        let m = decode(b"05003800090400".as_bytes().into());
+        let m = decode(b"05003800090400".as_ref().into());
         assert_eq!(m, StopRamp(Group(4)))
     }
 
     #[tokio::test]
     async fn setvar_level() {
-        let m = decode(b"0500380024041F00".as_bytes().into());
+        let m = decode(b"0500380024041F00".as_ref().into());
         assert_eq!(m, SetVar(Group(4), Level(0x1f), Rate(36)))
     }
 
     #[tokio::test]
     async fn short_message() {
-        let m = decode(b"050038007904".as_bytes().into());
+        let m = decode(b"050038007904".as_ref().into());
         assert_eq!(m, Unrecognised)
     }
 
     #[tokio::test]
     async fn empty_message() {
-        let m = decode(b"".as_bytes().into());
+        let m = decode(b"".as_ref().into());
         assert_eq!(m, Unrecognised)
     }
 
     #[tokio::test]
     async fn long_message() {
-        let m = decode(b"0500380024041F00A1".as_bytes().into());
+        let m = decode(b"0500380024041F00A1".as_ref().into());
         assert_eq!(m, Unrecognised)
     }
 
     #[tokio::test]
     async fn odd_length() {
-        let m = decode(b"0500380079040".as_bytes().into());
+        let m = decode(b"0500380079040".as_ref().into());
         assert_eq!(m, Unrecognised)
     }
 
     #[tokio::test]
     async fn not_hex() {
-        let m = decode(b"0500380009z400".as_bytes().into());
+        let m = decode(b"0500380009z400".as_ref().into());
         assert_eq!(m, Unrecognised)
     }
 }
