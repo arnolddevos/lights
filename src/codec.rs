@@ -43,6 +43,49 @@ pub const OPTIONS1: Param = Param(0x30);
 pub const OPTIONS1_NV: Param = Param(0x41);
 pub const OPTIONS3: Param = Param(0x42);
 
+static RAMP_CODES: [(u8, u16); 16] = [
+    (0x02, 0),
+    (0x0A, 4),
+    (0x12, 8),
+    (0x1a, 12),
+    (0x22, 20),
+    (0x2a, 30),
+    (0x32, 40),
+    (0x3a, 60),
+    (0x42, 90),
+    (0x4a, 120),
+    (0x52, 180),
+    (0x5a, 300),
+    (0x62, 420),
+    (0x6a, 600),
+    (0x72, 900),
+    (0x7a, 1020),
+];
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct Ramp(u16);
+
+impl Ramp {
+    pub fn decode(code: u8) -> Option<Ramp> {
+        for (c, s) in RAMP_CODES {
+            if c == code {
+                return Some(Ramp(s));
+            }
+        }
+        None
+    }
+
+    pub fn encode(&self) -> u8 {
+        let secs = self.0;
+        for (c, s) in RAMP_CODES {
+            if secs <= s {
+                return c;
+            }
+        }
+        0x7a
+    }
+}
+
 #[derive(PartialEq, Debug, Clone)]
 pub struct Level(u8);
 pub const ON: Level = Level(0xff);
@@ -52,12 +95,9 @@ pub const OFF: Level = Level(0x0);
 pub struct Group(u8);
 
 #[derive(PartialEq, Debug, Clone)]
-pub struct Rate(u8);
-
-#[derive(PartialEq, Debug, Clone)]
 pub enum Message {
     SetParam(Param, Setting),
-    SetVar(Group, Level, Rate),
+    SetVar(Group, Level, Ramp),
     Reset,
     StopRamp(Group),
     Status(Group, Vec<u8>),
@@ -76,10 +116,12 @@ pub fn hex_byte(input: &[u8]) -> IResult<&[u8], u8> {
 
 pub fn command_from_parts(parts: (u8, u8, u8, Option<u8>)) -> Option<Message> {
     match parts {
-        (0x79, group, _check, None) => Some(SetVar(Group(group), ON, Rate(0))),
-        (0x01, group, _check, None) => Some(SetVar(Group(group), OFF, Rate(0))),
+        (0x79, group, _check, None) => Some(SetVar(Group(group), ON, Ramp(0))),
+        (0x01, group, _check, None) => Some(SetVar(Group(group), OFF, Ramp(0))),
         (0x09, group, _check, None) => Some(StopRamp(Group(group))),
-        (rate, group, level, Some(_check)) => Some(SetVar(Group(group), Level(level), Rate(rate))),
+        (rate, group, level, Some(_check)) => {
+            Some(SetVar(Group(group), Level(level), Ramp::decode(rate)?))
+        }
         _ => None,
     }
 }
@@ -131,7 +173,7 @@ pub fn decode(bytes: Bytes) -> Message {
 
 pub fn encode(mesg: Message) -> Bytes {
     match mesg {
-        SetVar(Group(g), Level(l), Rate(_s)) => Bytes::from(format!("\\05380002{g:02X}{l:02X}\r")),
+        SetVar(Group(g), Level(l), Ramp(_s)) => Bytes::from(format!("\\05380002{g:02X}{l:02X}\r")),
         SetParam(Param(p), Setting(s)) => Bytes::from(format!("@A3{p:02x}00{s:02x}\r")),
         Reset => Bytes::from(b"~".as_ref()),
         _ => Bytes::new(),
@@ -156,13 +198,13 @@ mod tests {
     #[test]
     fn setvar_on() {
         let m = decode(b"05003800790400".as_ref().into());
-        assert_eq!(m, SetVar(Group(4), ON, Rate(0)))
+        assert_eq!(m, SetVar(Group(4), ON, Ramp(0)))
     }
 
     #[test]
     fn setvar_off() {
         let m = decode(b"05003800010400".as_ref().into());
-        assert_eq!(m, SetVar(Group(4), OFF, Rate(0)))
+        assert_eq!(m, SetVar(Group(4), OFF, Ramp(0)))
     }
 
     #[test]
@@ -173,8 +215,8 @@ mod tests {
 
     #[test]
     fn setvar_level() {
-        let m = decode(b"0500380024041F00".as_ref().into());
-        assert_eq!(m, SetVar(Group(4), Level(0x1f), Rate(36)))
+        let m = decode(b"050038002A041F00".as_ref().into());
+        assert_eq!(m, SetVar(Group(4), Level(0x1f), Ramp(30)))
     }
 
     #[test]
