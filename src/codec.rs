@@ -4,7 +4,7 @@ use bytes::{Bytes, BytesMut};
 use nom::{
     branch::alt,
     bytes::complete::{tag, take},
-    combinator::{all_consuming, map, map_opt, opt},
+    combinator::{all_consuming, map_opt, opt},
     multi::many1,
     sequence::{preceded, tuple},
     IResult, Parser,
@@ -139,7 +139,7 @@ pub fn status_from_parts(parts: (u8, Vec<u8>)) -> Option<Message> {
 }
 
 pub fn decode(bytes: Bytes) -> Message {
-    let mut command_pattern = map_opt(
+    let command_pattern = map_opt(
         preceded(
             tuple((tag("05"), take(2usize), tag("3800"))),
             tuple((hex_byte, hex_byte, hex_byte, opt(hex_byte))),
@@ -147,7 +147,7 @@ pub fn decode(bytes: Bytes) -> Message {
         command_from_parts,
     );
 
-    let mut status_pattern = map_opt(
+    let status_pattern = map_opt(
         preceded(
             tuple((
                 tag("86"),
