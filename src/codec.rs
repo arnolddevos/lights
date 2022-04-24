@@ -2,8 +2,10 @@ use std::ops::BitOr;
 
 use bytes::{Bytes, BytesMut};
 use nom::{
+    branch::alt,
     bytes::complete::{tag, take},
     combinator::{all_consuming, map, map_opt, opt},
+    multi::many1,
     sequence::{preceded, tuple},
     IResult, Parser,
 };
@@ -58,6 +60,7 @@ pub enum Message {
     SetVar(Group, Level, Rate),
     Reset,
     StopRamp(Group),
+    Status(Group, Vec<u8>),
     Unrecognised(Bytes),
 }
 use Message::*;
@@ -71,7 +74,7 @@ pub fn hex_byte(input: &[u8]) -> IResult<&[u8], u8> {
     map_opt(take(2usize), hex_extract).parse(input)
 }
 
-pub fn message_from_parts(parts: (u8, u8, u8, Option<u8>)) -> Option<Message> {
+pub fn command_from_parts(parts: (u8, u8, u8, Option<u8>)) -> Option<Message> {
     match parts {
         (0x79, group, _check, None) => Some(SetVar(Group(group), ON, Rate(0))),
         (0x01, group, _check, None) => Some(SetVar(Group(group), OFF, Rate(0))),
@@ -81,14 +84,42 @@ pub fn message_from_parts(parts: (u8, u8, u8, Option<u8>)) -> Option<Message> {
     }
 }
 
+pub fn status_from_parts(parts: (u8, Vec<u8>)) -> Option<Message> {
+    match parts {
+        (offset, mut status) => {
+            if let Some(_check) = status.pop() {
+                Some(Status(Group(offset), status))
+            } else {
+                None
+            }
+        }
+    }
+}
+
 pub fn decode(bytes: Bytes) -> Message {
-    let mut pattern = all_consuming(map_opt(
+    let mut command_pattern = map_opt(
         preceded(
             tuple((tag("05"), take(2usize), tag("3800"))),
             tuple((hex_byte, hex_byte, hex_byte, opt(hex_byte))),
         ),
-        message_from_parts,
-    ));
+        command_from_parts,
+    );
+
+    let mut status_pattern = map_opt(
+        preceded(
+            tuple((
+                tag("86"),
+                take(4usize),
+                tag("00"),
+                take(2usize),
+                tag("4038"),
+            )),
+            tuple((hex_byte, many1(hex_byte))),
+        ),
+        status_from_parts,
+    );
+
+    let mut pattern = all_consuming(alt((command_pattern, status_pattern)));
 
     let result = pattern.parse(&bytes[..]);
 
@@ -144,6 +175,16 @@ mod tests {
     fn setvar_level() {
         let m = decode(b"0500380024041F00".as_ref().into());
         assert_eq!(m, SetVar(Group(4), Level(0x1f), Rate(36)))
+    }
+
+    #[test]
+    fn status_zero() {
+        let m = decode(
+            b"86081500F74038B000000000000000000000000000000000000000003E"
+                .as_ref()
+                .into(),
+        );
+        assert_eq!(m, Status(Group(176), vec![0; 20]));
     }
 
     #[test]
