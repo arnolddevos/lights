@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::ops::BitOr;
 
 use bytes::{Bytes, BytesMut};

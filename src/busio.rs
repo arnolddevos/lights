@@ -112,6 +112,8 @@ where
 /// let (tx, _) = mpsc::channel(100);
 /// read_lines(rx, forward_to(tx))
 /// ```
+///
+#[allow(dead_code)]
 pub fn forward_to<'a, T>(s: &'a Sender<T>) -> impl Fn(T) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
     |value| {
         Box::pin(async {
