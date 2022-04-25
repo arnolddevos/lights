@@ -1,5 +1,7 @@
 use bytes::Bytes;
 use codec::Message;
+use serve::{serve_daemon, Post};
+use std::fmt::Debug;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::broadcast::{self, Receiver, Sender};
@@ -8,21 +10,28 @@ use tokio::{select, task};
 
 mod busio;
 mod codec;
+mod serve;
 
 const HOST: &str = "C228F35.gracelands";
 const PORT: u16 = 10001;
 
-async fn accept(line: Bytes, inbound: &Sender<Message>) {
-    let mesg = codec::decode(line);
-    println!("> {mesg:?}");
-    let _ = inbound.send(mesg);
+/// Something that happened somewhere in the recent past.
+#[derive(Clone, PartialEq, Debug)]
+pub enum Event {
+    Cbus(Message),
+    Hmi(Post),
 }
 
-async fn input_task<I>(inp: I, inbound: Sender<Message>) -> io::Result<()>
+async fn input_task<I>(input: I, inbound: Sender<Event>) -> io::Result<()>
 where
     I: AsyncRead + Unpin,
 {
-    busio::read_lines(inp, |line| accept(line, &inbound)).await
+    async fn accept(line: Bytes, inbound: &Sender<Event>) {
+        let mesg = codec::decode(line);
+        let _ = inbound.send(Event::Cbus(mesg));
+    }
+
+    busio::read_lines(input, |line| accept(line, &inbound)).await
 }
 
 async fn output_task<O>(mut outbound: Receiver<Message>, mut output: O) -> io::Result<()>
@@ -37,7 +46,11 @@ where
     }
 }
 
-async fn cbus_session(inbound: Sender<Message>, outbound: Receiver<Message>) -> io::Result<()> {
+async fn cbus_session(inbound: &Sender<Event>, outbound: &Sender<Message>) -> io::Result<()> {
+    // connect to internal pub/sub
+    let inbound = inbound.clone();
+    let outbound = outbound.subscribe();
+
     // Connect to a CBUS device
     let stream = TcpStream::connect((HOST, PORT)).await?;
     let (input, mut output) = stream.into_split();
@@ -51,19 +64,40 @@ async fn cbus_session(inbound: Sender<Message>, outbound: Receiver<Message>) -> 
     select! {res = input_task => res?, res = output_task => res?}
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting at {:?}", Instant::now());
-
-    let (inbound, _) = broadcast::channel(16);
-    let (outbound, _) = broadcast::channel(16);
-
+// maintain a connection to the CBUS
+async fn cbus_daemon(inbound: Sender<Event>, outbound: Sender<Message>) -> io::Result<()> {
     loop {
         println!("Connecting...");
-        let inbound = inbound.clone();
-        let outbound = outbound.subscribe();
-        let res = cbus_session(inbound, outbound).await;
+        let res = cbus_session(&inbound, &outbound).await;
         println!("{res:?}");
         sleep(Duration::from_millis(2000)).await;
+    }
+}
+
+async fn log_task<T>(mut channel: Receiver<T>)
+where
+    T: Debug + Clone,
+{
+    while let Ok(t) = channel.recv().await {
+        println!("{t:?}")
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    println!("Starting at {:?}", Instant::now());
+
+    // create the internal pub/sub channels
+    let (inbound, _) = broadcast::channel::<Event>(16);
+    let (outbound, _) = broadcast::channel::<Message>(16);
+
+    // create the tasks
+    let cbus_daemon = task::spawn(cbus_daemon(inbound.clone(), outbound.clone()));
+    let serve_daemon = task::spawn(serve_daemon(inbound.clone()));
+    let log_task = task::spawn(log_task(inbound.subscribe()));
+
+    // run all the tasks
+    select! {
+        res = cbus_daemon => println!("{res:?}"), res = serve_daemon => println!("{res:?}"), _ = log_task => ()
     }
 }
