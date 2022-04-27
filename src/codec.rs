@@ -1,3 +1,5 @@
+//! `codec` defines types for CBUS messages and encode/decode functions.
+//! these work with a standard CBUS serial interface over RS232 or TCP.
 #![allow(dead_code)]
 
 use std::ops::BitOr;

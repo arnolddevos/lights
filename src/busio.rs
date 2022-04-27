@@ -1,3 +1,5 @@
+//! Buffered reader tailored to the CBUS serial interface.
+
 use bytes::{Bytes, BytesMut};
 use nom::character::streaming::{line_ending, not_line_ending};
 use nom::sequence::pair;
