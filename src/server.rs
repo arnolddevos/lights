@@ -1,6 +1,7 @@
 use super::codec::{Group, Level, Ramp};
 use super::Event;
 use tokio::sync::broadcast::Sender;
+use warp::http::StatusCode;
 use warp::Filter;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -23,8 +24,12 @@ pub async fn server_daemon(inbound: Sender<Event>) {
                 Level(level),
                 Ramp(ramp),
             )));
-            println!("* forwarding a http request {res:?}");
-            warp::reply()
+            if res.is_ok() {
+                StatusCode::OK
+            } else {
+                println!("* server_daemon: {res:?}");
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         });
 
     warp::serve(routes).bind(([127, 0, 0, 1], 3030)).await
