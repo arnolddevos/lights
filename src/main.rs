@@ -11,6 +11,7 @@ use tokio::{select, task};
 mod busio;
 mod codec;
 mod serve;
+mod server;
 
 const HOST: &str = "C228F35.gracelands";
 const PORT: u16 = 10001;
@@ -67,9 +68,9 @@ async fn cbus_session(inbound: &Sender<Event>, outbound: &Sender<Message>) -> io
 // maintain a connection to the CBUS
 async fn cbus_daemon(inbound: Sender<Event>, outbound: Sender<Message>) -> io::Result<()> {
     loop {
-        println!("Connecting...");
+        println!("* connecting to cbus...");
         let res = cbus_session(&inbound, &outbound).await;
-        println!("{res:?}");
+        println!("* cbus disconnect: {res:?}");
         sleep(Duration::from_millis(2000)).await;
     }
 }
@@ -81,17 +82,15 @@ where
     loop {
         let res = channel.recv().await;
         if let Ok(t) = res {
-            println!("{t:?}")
+            println!("> {t:?}")
         } else {
-            println!("{res:?}")
+            println!("* log_task: {res:?}")
         }
     }
 }
 
 #[tokio::main]
 async fn main() {
-    println!("Starting at {:?}", Instant::now());
-
     // create the internal pub/sub channels
     let (inbound, _) = broadcast::channel::<Event>(16);
     let (outbound, _) = broadcast::channel::<Message>(16);
@@ -103,6 +102,8 @@ async fn main() {
 
     // run all the tasks
     select! {
-        res = cbus_daemon => println!("{res:?}"), res = server_daemon => println!("{res:?}"), res = log_task => println!("{res:?}")
+        res = cbus_daemon => println!("exit cbus_daemon: {res:?}"),
+        res = server_daemon => println!("exit server_daemon: {res:?}"),
+        res = log_task => println!("exit log_task: {res:?}")
     };
 }

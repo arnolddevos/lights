@@ -23,7 +23,7 @@ pub async fn server_daemon(inbound: Sender<Event>) {
                 Level(level),
                 Ramp(ramp),
             )));
-            println!("Forwarding a http request {res:?}");
+            println!("* forwarding a http request {res:?}");
             warp::reply()
         });
 

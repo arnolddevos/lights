@@ -134,6 +134,6 @@ mod tests {
             println!("> {:?}", bytes);
         })
         .await;
-        println!("{:?}", res)
+        println!("* {:?}", res)
     }
 }
