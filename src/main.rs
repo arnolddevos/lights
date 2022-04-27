@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use codec::Message;
+use gaffer::gaffer_daemon;
 use server::{server_daemon, Post};
 use std::fmt::Debug;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -10,7 +11,7 @@ use tokio::{select, task};
 
 mod busio;
 mod codec;
-mod serve;
+mod gaffer;
 mod server;
 
 const HOST: &str = "C228F35.gracelands";
@@ -47,11 +48,7 @@ where
     }
 }
 
-async fn cbus_session(inbound: &Sender<Event>, outbound: &Sender<Message>) -> io::Result<()> {
-    // connect to internal pub/sub
-    let inbound = inbound.clone();
-    let outbound = outbound.subscribe();
-
+async fn cbus_session(inbound: Sender<Event>, outbound: Receiver<Message>) -> io::Result<()> {
     // Connect to a CBUS device
     let stream = TcpStream::connect((HOST, PORT)).await?;
     let (input, mut output) = stream.into_split();
@@ -69,7 +66,7 @@ async fn cbus_session(inbound: &Sender<Event>, outbound: &Sender<Message>) -> io
 async fn cbus_daemon(inbound: Sender<Event>, outbound: Sender<Message>) -> io::Result<()> {
     loop {
         println!("* connecting to cbus...");
-        let res = cbus_session(&inbound, &outbound).await;
+        let res = cbus_session(inbound.clone(), outbound.subscribe()).await;
         println!("* cbus disconnect: {res:?}");
         sleep(Duration::from_millis(2000)).await;
     }
@@ -97,12 +94,14 @@ async fn main() {
 
     // create the tasks
     let cbus_daemon = task::spawn(cbus_daemon(inbound.clone(), outbound.clone()));
+    let gaffer_daemon = task::spawn(gaffer_daemon(inbound.subscribe(), outbound.clone()));
     let server_daemon = task::spawn(server_daemon(inbound.clone()));
     let log_task = task::spawn(log_task(inbound.subscribe()));
 
     // run all the tasks
     select! {
         res = cbus_daemon => println!("exit cbus_daemon: {res:?}"),
+        res = gaffer_daemon => println!("exit gaffer_daemon: {res:?}"),
         res = server_daemon => println!("exit server_daemon: {res:?}"),
         res = log_task => println!("exit log_task: {res:?}")
     };
