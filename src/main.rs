@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use codec::Message;
-use serve::{serve_daemon, Post};
+use server::{server_daemon, Post};
 use std::fmt::Debug;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -78,8 +78,13 @@ async fn log_task<T>(mut channel: Receiver<T>)
 where
     T: Debug + Clone,
 {
-    while let Ok(t) = channel.recv().await {
-        println!("{t:?}")
+    loop {
+        let res = channel.recv().await;
+        if let Ok(t) = res {
+            println!("{t:?}")
+        } else {
+            println!("{res:?}")
+        }
     }
 }
 
@@ -93,11 +98,11 @@ async fn main() {
 
     // create the tasks
     let cbus_daemon = task::spawn(cbus_daemon(inbound.clone(), outbound.clone()));
-    let serve_daemon = task::spawn(serve_daemon(inbound.clone()));
+    let server_daemon = task::spawn(server_daemon(inbound.clone()));
     let log_task = task::spawn(log_task(inbound.subscribe()));
 
     // run all the tasks
     select! {
-        res = cbus_daemon => println!("{res:?}"), res = serve_daemon => println!("{res:?}"), _ = log_task => ()
-    }
+        res = cbus_daemon => println!("{res:?}"), res = server_daemon => println!("{res:?}"), res = log_task => println!("{res:?}")
+    };
 }

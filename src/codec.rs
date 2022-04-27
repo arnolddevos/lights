@@ -65,7 +65,7 @@ static RAMP_CODES: [(u8, u16); 16] = [
 ];
 
 #[derive(PartialEq, Debug, Clone)]
-pub struct Ramp(u16);
+pub struct Ramp(pub u16);
 
 impl Ramp {
     pub fn decode(code: u8) -> Option<Ramp> {
@@ -89,12 +89,12 @@ impl Ramp {
 }
 
 #[derive(PartialEq, Debug, Clone)]
-pub struct Level(u8);
+pub struct Level(pub u8);
 pub const ON: Level = Level(0xff);
 pub const OFF: Level = Level(0x0);
 
 #[derive(PartialEq, Debug, Clone)]
-pub struct Group(u8);
+pub struct Group(pub u8);
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum Message {
