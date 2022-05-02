@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::broadcast::{self, Receiver, Sender};
-use tokio::time::{sleep, Duration, Instant};
+use tokio::time::{sleep, Duration};
 use tokio::{select, task};
 
 mod busio;

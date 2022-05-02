@@ -5,7 +5,7 @@ use tokio::sync::broadcast::{Receiver, Sender};
 
 /// `gaffer` controls the lighting.  
 ///
-/// It observes inbound events from CBUS and the HMI (via HTTP)
+/// It observes inbound events from CBUS and the HMI
 /// and generates outbound messages to CBUS
 pub async fn gaffer_daemon(mut inbound: Receiver<Event>, outbound: Sender<Message>) {
     loop {

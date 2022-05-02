@@ -106,24 +106,6 @@ where
     }
 }
 
-/// Returns an async function that forwards values to an mpsc queue.   
-///
-/// Example: arrange for lines of input to be sent to a queue:
-/// ```
-/// let (rx, _) = tcp_stream.split();
-/// let (tx, _) = mpsc::channel(100);
-/// read_lines(rx, forward_to(tx))
-/// ```
-///
-#[allow(dead_code)]
-pub fn forward_to<'a, T>(s: &'a Sender<T>) -> impl Fn(T) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
-    |value| {
-        Box::pin(async {
-            let _ = s.send(value).await;
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::read_lines;
